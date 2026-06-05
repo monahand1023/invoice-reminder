@@ -1,0 +1,16 @@
+Subject: Past due: invoice {{ invoice_id }} ({{ amount_display }}) — {{ days_overdue }} days overdue
+
+Hello {{ customer_name }},
+
+Our records show that invoice {{ invoice_id }} for {{ amount_display }}, due on
+{{ due_date_display }}, is now {{ days_overdue }} days overdue and remains unpaid.
+
+Please arrange payment at your earliest convenience. If there is an issue with
+this invoice or you have already paid, let us know right away so we can update
+our records.
+
+To pay or to discuss this balance, contact our billing team at
+{{ payment_contact }}.
+
+Regards,
+{{ sender_name }}

@@ -1,0 +1,162 @@
+{
+  "_comment": "Seed data for MockInvoiceSource. due_date offsets are anchored to 2026-06-05 (the project 'today'). Run the CLI with --as-of 2026-06-05 to reproduce the documented stages on any calendar day. Amounts are strings to keep Decimal money exact (no float artifacts).",
+  "as_of_anchor": "2026-06-05",
+  "invoices": [
+    {
+      "invoice_id": "INV-1001",
+      "customer_name": "Northwind Outfitters",
+      "customer_email": "ap@northwind.example",
+      "amount": "1500.00",
+      "currency": "USD",
+      "issue_date": "2026-05-26",
+      "due_date": "2026-06-25",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "not due yet (-20 days); no reminder"
+    },
+    {
+      "invoice_id": "INV-1002",
+      "customer_name": "Cedar & Co.",
+      "customer_email": "billing@cedarco.example",
+      "amount": "2000.00",
+      "currency": "USD",
+      "issue_date": "2026-05-06",
+      "due_date": "2026-06-05",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "due exactly today (0 days overdue); no reminder"
+    },
+    {
+      "invoice_id": "INV-1003",
+      "customer_name": "Brightline Media",
+      "customer_email": "accounts@brightline.example",
+      "amount": "3200.00",
+      "currency": "USD",
+      "issue_date": "2026-05-05",
+      "due_date": "2026-06-04",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "boundary +1; friendly"
+    },
+    {
+      "invoice_id": "INV-1004",
+      "customer_name": "Maison Verte",
+      "customer_email": "compta@maisonverte.example",
+      "amount": "4750.00",
+      "currency": "EUR",
+      "issue_date": "2026-05-03",
+      "due_date": "2026-06-02",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "+3; friendly; EUR"
+    },
+    {
+      "invoice_id": "INV-1005",
+      "customer_name": "Harbor Print Goods",
+      "customer_email": "ap@harborprint.example",
+      "amount": "900.00",
+      "currency": "USD",
+      "issue_date": "2026-04-23",
+      "due_date": "2026-05-23",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "+13; just below firm; friendly"
+    },
+    {
+      "invoice_id": "INV-1006",
+      "customer_name": "Atlas Freight Lines",
+      "customer_email": "payables@atlasfreight.example",
+      "amount": "12300.00",
+      "currency": "USD",
+      "issue_date": "2026-04-22",
+      "due_date": "2026-05-22",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "boundary +14; firm"
+    },
+    {
+      "invoice_id": "INV-1007",
+      "customer_name": "Kingsway Estates",
+      "customer_email": "finance@kingsway.example",
+      "amount": "6800.00",
+      "currency": "GBP",
+      "issue_date": "2026-04-20",
+      "due_date": "2026-05-20",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "+16; firm; GBP"
+    },
+    {
+      "invoice_id": "INV-1008",
+      "customer_name": "Sierra Outdoor Gear",
+      "customer_email": "ap@sierraoutdoor.example",
+      "amount": "7400.00",
+      "currency": "USD",
+      "issue_date": "2026-04-07",
+      "due_date": "2026-05-07",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "+29; just below final; firm"
+    },
+    {
+      "invoice_id": "INV-1009",
+      "customer_name": "Pinnacle Realty Group",
+      "customer_email": "billing@pinnaclerealty.example",
+      "amount": "5500.00",
+      "currency": "USD",
+      "issue_date": "2026-04-06",
+      "due_date": "2026-05-06",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "boundary +30; final"
+    },
+    {
+      "invoice_id": "INV-1010",
+      "customer_name": "Vanguard Automotive Holdings",
+      "customer_email": "ap@vanguardauto.example",
+      "amount": "95000.00",
+      "currency": "USD",
+      "issue_date": "2026-04-01",
+      "due_date": "2026-05-01",
+      "status": "open",
+      "do_not_contact": false,
+      "_note": "+35; final; the $95K whale"
+    },
+    {
+      "invoice_id": "INV-1011",
+      "customer_name": "Lakeside Resorts",
+      "customer_email": "ap@lakesideresorts.example",
+      "amount": "2500.00",
+      "currency": "USD",
+      "issue_date": "2026-04-10",
+      "due_date": "2026-05-10",
+      "status": "paid",
+      "do_not_contact": false,
+      "_note": "+26 by date but PAID; never selected"
+    },
+    {
+      "invoice_id": "INV-1012",
+      "customer_name": "Orion Manufacturing",
+      "customer_email": "ap@orionmfg.example",
+      "amount": "3000.00",
+      "currency": "USD",
+      "issue_date": "2026-04-15",
+      "due_date": "2026-05-15",
+      "status": "void",
+      "do_not_contact": false,
+      "_note": "+21 by date but VOID; never selected"
+    },
+    {
+      "invoice_id": "INV-1013",
+      "customer_name": "Halcyon Wellness Spa",
+      "customer_email": "owner@halcyonspa.example",
+      "amount": "8000.00",
+      "currency": "USD",
+      "issue_date": "2026-03-21",
+      "due_date": "2026-04-20",
+      "status": "open",
+      "do_not_contact": true,
+      "_note": "+46 and overdue, but DO_NOT_CONTACT; never selected"
+    }
+  ]
+}

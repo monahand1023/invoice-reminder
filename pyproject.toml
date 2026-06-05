@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "invoice-reminders"
+version = "0.1.0"
+description = "Deterministic accounts-receivable (dunning) reminder tool for a magazine publisher"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+# Only needed if you turn ON the optional LLM tone-rewrite (tone_rewrite.enabled).
+# The deterministic core never imports this; tests run without it.
+llm = [
+    "anthropic>=0.40",
+]
+
+[project.scripts]
+reminders = "reminders.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+# This project uses no asyncio; quiet the globally-installed pytest-asyncio's
+# config deprecation so test output stays pristine.
+asyncio_default_fixture_loop_scope = "function"

@@ -1,0 +1,15 @@
+Subject: Friendly reminder: invoice {{ invoice_id }} ({{ amount_display }})
+
+Hi {{ customer_name }},
+
+Hope you're doing well! This is a quick, friendly reminder that invoice
+{{ invoice_id }} for {{ amount_display }} was due on {{ due_date_display }} and is
+now {{ days_overdue }} day{{ 's' if days_overdue != 1 else '' }} past due.
+
+If it's already on its way, thank you and please disregard this note. If not,
+we'd appreciate it whenever you get a chance.
+
+Questions about this invoice? Reach our billing team at {{ payment_contact }}.
+
+Warm regards,
+{{ sender_name }}

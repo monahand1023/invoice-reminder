@@ -1,0 +1,7 @@
+Invoice #,Advertiser,Billing Email,Balance Due,Invoice Date,Due Date,Status,Do Not Contact
+INV-2001,Northwind Outfitters,ap@northwind.example,"$1,500.00",05/26/2026,06/25/2026,Unpaid,No
+INV-2003,Brightline Media,accounts@brightline.example,"$3,200.00",05/05/2026,06/04/2026,Unpaid,No
+INV-2006,Atlas Freight Lines,payables@atlasfreight.example,"$12,300.00",04/22/2026,05/22/2026,Unpaid,No
+INV-2010,Vanguard Automotive Holdings,ap@vanguardauto.example,"$95,000.00",04/01/2026,05/01/2026,Unpaid,No
+INV-2011,Lakeside Resorts,ap@lakesideresorts.example,"$2,500.00",04/10/2026,05/10/2026,Paid,No
+INV-2013,Halcyon Wellness Spa,owner@halcyonspa.example,"$8,000.00",03/21/2026,04/20/2026,Unpaid,Yes

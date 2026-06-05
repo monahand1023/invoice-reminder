@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# Invoice Reminders — configuration
+#
+# Copy to config.yaml and edit. Everything that drives WHO gets billed, WHAT
+# they owe, and the SCHEDULE lives here (not in code). Secrets live in .env.
+#
+# ${VAR} placeholders are expanded from the environment (.env is auto-loaded).
+# ---------------------------------------------------------------------------
+
+# Sender identity stamped onto every reminder. Not a secret.
+sender:
+  name: "Acme Magazine — Billing"
+  email: "billing@acmemagazine.example"
+  reply_to: "billing@acmemagazine.example"
+  # Shown in the body so advertisers know who to talk to about payment.
+  payment_contact: "billing@acmemagazine.example or call (555) 123-4567"
+
+# Directory holding the Jinja2 templates (friendly/firm/final .txt.j2).
+templates_dir: "templates"
+
+# Where invoices come from. The source is pluggable; pick exactly one.
+#   mock  — JSON fixture (the built-in demo)
+#   csv   — a Magazine Manager AR/aging export (the no-credentials MVP)
+#   quickbooks_online / quickbooks_desktop — real QB integrations (if MM syncs to QB)
+#   magazine_manager — browser automation (last resort; stub)
+# See README "OPEN QUESTION — pick the data source".
+source:
+  kind: "mock"                       # mock | csv | quickbooks_online | quickbooks_desktop | magazine_manager
+  fixture_path: "fixtures/sample_invoices.json"   # for kind=mock
+  # csv_path: "fixtures/magazine_manager_ar_export_sample.csv"   # for kind=csv
+
+# The dunning ladder. ORDER MATTERS: stages must be listed ascending by
+# min_days_overdue. The policy picks the highest stage an invoice currently
+# qualifies for (its "bucket"), and sends it once — ever.
+dunning:
+  # COLD-START SAFETY (recommended for real deployments — left OFF here so the
+  # mock demo still shows friendly/firm/final). When you first point this at a
+  # real billing system you inherit a backlog of invoices that are already very
+  # overdue but have never been contacted. Without a cap, their FIRST email
+  # would be a "FINAL NOTICE". Set this to a stage name to hold the first-ever
+  # reminder for any invoice down to that stage; it escalates normally after.
+  #   first_contact_stage_cap: "friendly"
+  stages:
+    - name: "friendly"
+      min_days_overdue: 1
+      tone: "friendly"
+      template: "friendly.txt.j2"
+    - name: "firm"
+      min_days_overdue: 14
+      tone: "firm"
+      template: "firm.txt.j2"
+    - name: "final"
+      min_days_overdue: 30
+      tone: "final"
+      template: "final.txt.j2"
+
+# OPTIONAL LLM tone-rewrite — OFF by default. This is the ONLY place an LLM
+# touches a reminder, and it only rephrases the email body's wording at send-time
+# (never the amount, stage, or recipient). It's applied after approval, cached per
+# (invoice, stage) so re-sends are byte-identical, and a fact guard falls back to
+# the deterministic copy if the model drops the invoice number or amount. Requires
+# `pip install -e ".[llm]"` and ANTHROPIC_API_KEY in .env.
+tone_rewrite:
+  enabled: false
+  model: "claude-opus-4-8"
+  max_tokens: 1024
+
+# Persistent idempotency / audit store + the approval queue.
+state:
+  db_path: "reminders_state.sqlite3"
+
+# Real-send transport. NEVER reached in dry-run, and never reached in --send
+# mode unless REMINDERS_ALLOW_SEND=1 AND a batch has been explicitly approved.
+smtp:
+  host: "smtp.gmail.com"
+  port: 587
+  use_tls: true
+  username: "${SMTP_USERNAME}"       # from .env
+  password: "${SMTP_PASSWORD}"       # from .env — Gmail app password, NOT your login
