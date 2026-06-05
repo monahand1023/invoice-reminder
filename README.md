@@ -13,8 +13,9 @@ staffer who does it by hand.
 **It runs today with no credentials.** Point it at a CSV export of your open
 invoices (or the built-in mock fixtures) and it shows exactly what it *would* send
 — nothing leaves without explicit human approval. The **recommended deployment is
-deliberately small**: run it on a schedule (cron / launchd / Task Scheduler) and
-approve sends from the CLI — one runtime, one SQLite file. The QuickBooks Online /
+deliberately small**: a single scheduled job (cron / launchd / Task Scheduler) —
+either **fully automated** (`cron-run` auto-sends the routine lane and holds the
+risky slice for a human) or **manual-approve** — one runtime, one SQLite file. The QuickBooks Online /
 Desktop adapters are **blueprinted and unit-tested but not verified against a live
 tenant** (and QuickBooks Desktop additionally needs a SOAP host that isn't in this
 repo) — build exactly one, for real, once you confirm where the data lives. An
@@ -215,6 +216,7 @@ password**, not your login), set `REMINDERS_ALLOW_SEND=1`, then `run --send` and
 | `approve <batch-id>` | Releases an approved batch to the `SMTPNotifier`, then records each send to the state store. Requires `REMINDERS_ALLOW_SEND=1`. | **Yes** |
 | `history [--invoice ID]` | Dumps the audit trail (invoice, stage, sent-at, channel, recipient, batch, message hash). | No |
 | `batches [--cancel ID]` | Lists staged approval batches and their status; `--cancel` discards a pending batch (a canceled batch can never be sent). | No |
+| `cron-run [--dry-run]` | Unattended: auto-sends the routine lane, diverts final/high-value/first-contact to the human queue, behind fail-closed guards. Needs `automation.enabled` + `REMINDERS_ALLOW_SEND=1`. `--dry-run` sends nothing. | **Yes** |
 
 > Add `--json` to any command (before or after the subcommand) for one
 > machine-readable JSON object on stdout — that's the surface the n8n workflow and
@@ -328,20 +330,55 @@ one: where does the overdue list actually come from? Four paths, best to last re
 
 ## Running on a schedule (cron first, n8n optional)
 
-**For one small publisher, plain scheduling is the simplest, most maintainable
-deployment — one runtime, nothing extra to host.** A daily preview, then a one-line
-approve when you're happy:
+One small publisher, one runtime, nothing extra to host. Two ways to schedule it —
+**fully automated** (recommended for hands-off), or **manual approval** (most
+conservative). Both via plain cron; no second system.
+
+### Fully automated — `reminders cron-run`
+
+A daily cron stages, sends the **routine lane**, and **diverts the irreversible
+slice to a human** — all unattended. This is the answer to "can it just run itself?"
+*Yes — for the routine majority; the dangerous slice keeps a person, by design.*
 
 ```bash
-# crontab: weekday mornings, email yourself the preview (sends nothing)
+# crontab: weekday mornings. Ships OFF (automation.enabled: false) — flip on after the canary.
+0 8 * * 1-5  cd /opt/invoice-reminder && REMINDERS_ALLOW_SEND=1 reminders cron-run >> cron.log 2>&1
+```
+
+| Auto-sends unattended | Diverted to the human `approve` queue |
+|---|---|
+| `friendly` / `firm` stages, amount ≤ `max_auto_amount`, advertiser **already** contacted | **every `final` notice**, any high-value balance, **first-ever** contact to a new advertiser |
+
+**The split is enforced in code, not just config** (`reminders.automation`): no
+`config.yaml` edit can route a final notice or a balance over **$2,500** into the
+auto lane. Because no human reviews each send, the guards *are* the safety — every
+one **fails closed** (refuses the whole run + alerts, never a partial blast):
+
+- **kill switch** — `automation.enabled` must be true *and* `REMINDERS_ALLOW_SEND=1`; drop a `HOLD` file to pause everything instantly;
+- **freshness** — refuses to dun off a CSV older than `csv_max_age_hours` (a stale export silently escalating paid invoices is the #1 risk);
+- **required cap** — `first_contact_stage_cap` must be set;
+- **per-run cap + volume floor** — a malformed export can't blast everyone, and an empty/partial export is a *loud failure*, not a quiet "nothing due";
+- **strict ingest** — unknown status is quarantined (not treated as "open"); a missing status / do-not-contact column refuses; `$0`/negative/implausible amounts and invalid emails are quarantined;
+- **post-run summary** emailed to `automation.summary_to` after **every** run, listing what sent, what's held (with the `approve` command), and what was quarantined.
+
+**Roll it out, don't flip it on.** Ship dark → `cron-run --dry-run` daily for a week
+(it runs every guard and emails the summary but **sends nothing** — compare against
+what you'd have approved by hand) → `enabled: true` with `max_send_per_run: 1` and
+`auto_stages: ["friendly"]` → ramp. Full rationale in
+[`docs/design-decisions.md`](docs/design-decisions.md) (Decision 7).
+
+### Manual approval (most conservative)
+
+Prefer to eyeball every batch? Cron the preview, approve by hand:
+
+```bash
 0 8 * * 1-5  cd /opt/invoice-reminder && reminders run --dry-run | mail -s "Overdue invoices" you@pub.example
 # then, from a shell, when ready:
 REMINDERS_ALLOW_SEND=1 reminders run --send            # stage a batch -> prints a batch-id
 REMINDERS_ALLOW_SEND=1 reminders approve <batch-id>    # the only step that emails
 ```
 
-The schedule is cron; the approval is you. Every money guarantee lives in the tested
-Python core — no second system owns any of it.
+Every money guarantee lives in the tested Python core — no second system owns any of it.
 
 ### Optional: n8n (only if you already run it)
 

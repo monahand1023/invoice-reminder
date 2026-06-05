@@ -7,6 +7,7 @@ in YAML as ``${VAR}`` and expanded at load time.
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -98,6 +99,27 @@ class ToneRewriteConfig(BaseModel):
     max_tokens: int = 1024
 
 
+class AutomationConfig(BaseModel):
+    """Unattended (cron) send mode. Ships OFF. When on, sends the *routine* lane
+    automatically and diverts the irreversible slice (final notices, high-value,
+    first-ever contacts) to the human approval queue. The dangerous-slice gate is
+    additionally enforced in code (see reminders.automation) — config can only make
+    it MORE conservative, never less. See README "Running unattended"."""
+
+    enabled: bool = False                         # master kill switch (authorization)
+    hold_flag_path: str | None = None             # if this file exists, refuse all sends
+    csv_max_age_hours: float = 26.0               # refuse if the export is older than this
+    auto_stages: list[str] = ["friendly", "firm"]  # 'final' is NEVER auto (also code-enforced)
+    max_auto_amount: Decimal = Decimal("1000")    # config ceiling (capped again in code)
+    max_send_per_run: int = 25                    # a malformed export can't blast everyone
+    min_open_invoices: int = 1                    # empty/header-only export is a LOUD failure
+    min_amount: Decimal = Decimal("1")            # quarantine $0 / negative (paid / credits)
+    max_amount: Decimal = Decimal("150000")       # quarantine implausible amounts
+    require_status_column: bool = True            # missing status column refuses (no fail-open)
+    require_dnc_column: bool = True               # missing do_not_contact column refuses
+    summary_to: str = ""                          # email address for the post-run summary/alerts
+
+
 class Config(BaseModel):
     sender: SenderConfig
     source: SourceConfig
@@ -105,6 +127,7 @@ class Config(BaseModel):
     state: StateConfig
     smtp: SmtpConfig
     tone_rewrite: ToneRewriteConfig = ToneRewriteConfig()
+    automation: AutomationConfig = AutomationConfig()
     templates_dir: str = "templates"
 
 

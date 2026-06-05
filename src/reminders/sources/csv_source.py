@@ -60,11 +60,21 @@ _STATUS = {
 _TRUTHY = {"true", "yes", "y", "1", "x", "t"}
 
 
+class DataIntegrityError(Exception):
+    """A structural problem with the export that must abort an unattended run
+    (e.g. a required column is missing), as opposed to a single bad row."""
+
+
 class CsvInvoiceSource(InvoiceSource):
-    def __init__(self, csv_path: str | Path):
+    def __init__(self, csv_path: str | Path, *, strict: bool = False):
         self.csv_path = Path(csv_path)
+        # strict mode (for unattended sends): require status + do_not_contact columns
+        # and quarantine rows with an UNRECOGNIZED status instead of fail-open to OPEN.
+        self.strict = strict
+        self.quarantined: list[tuple[str, str]] = []
 
     def list_open_invoices(self) -> list[Invoice]:
+        self.quarantined = []
         # utf-8-sig transparently drops a BOM if the export has one.
         with self.csv_path.open(newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
@@ -92,6 +102,15 @@ class CsvInvoiceSource(InvoiceSource):
                 f"CSV export is missing a recognizable column for: {', '.join(missing)}. "
                 f"Found headers: {headers}"
             )
+        if self.strict:
+            # No fail-open: a missing status/do_not_contact column must abort, not
+            # silently default every row to open/contactable.
+            for field in ("status", "do_not_contact"):
+                if field not in mapping:
+                    raise DataIntegrityError(
+                        f"unattended send requires a '{field}' column in the export; "
+                        f"found headers: {headers}"
+                    )
         return mapping
 
     def _row_to_invoice(self, row: dict, mapping: dict[str, str]) -> Invoice | None:
@@ -103,6 +122,16 @@ class CsvInvoiceSource(InvoiceSource):
         if not invoice_id:
             return None  # blank/spacer row
 
+        status_token = _norm(cell("status"))
+        if status_token in _STATUS:
+            status = _STATUS[status_token]
+        elif self.strict:
+            # Unknown/blank status: in strict mode that's do-not-send, never "open".
+            self.quarantined.append((invoice_id, f"unknown-status:{cell('status')!r}"))
+            return None
+        else:
+            status = InvoiceStatus.OPEN
+
         return Invoice(
             invoice_id=invoice_id,
             customer_name=cell("customer_name"),
@@ -111,7 +140,7 @@ class CsvInvoiceSource(InvoiceSource):
             currency=(cell("currency") or "USD").upper(),
             issue_date=_parse_date(cell("issue_date"), invoice_id, "issue_date"),
             due_date=_parse_date(cell("due_date"), invoice_id, "due_date"),
-            status=_STATUS.get(_norm(cell("status")), InvoiceStatus.OPEN),
+            status=status,
             do_not_contact=cell("do_not_contact").lower() in _TRUTHY,
         )
 

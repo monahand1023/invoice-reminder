@@ -32,9 +32,10 @@ from reminders.config import Config, load_config
 from reminders.models import Reminder, SendResult
 from reminders.notifiers.base import Notifier
 from reminders.notifiers.console import ConsoleNotifier
-from reminders.notifiers.smtp import SMTPNotifier
+from reminders.notifiers.smtp import SMTPNotifier, send_operator_email
 from reminders.pipeline import ReminderPipeline
 from reminders.policy import DunningPolicy
+from reminders.sources.base import InvoiceSource
 from reminders.sources.mock import MockInvoiceSource
 from reminders.state import AlreadySentError, ReminderStateStore
 from reminders.templates import TemplateEngine
@@ -90,6 +91,16 @@ def build_pipeline(config: Config, store: ReminderStateStore) -> ReminderPipelin
         templates=TemplateEngine(config.templates_dir, config.sender),
         store=store,
     )
+
+
+class _ListInvoiceSource(InvoiceSource):
+    """In-memory source over an already-validated invoice list (for cron-run)."""
+
+    def __init__(self, invoices: list):
+        self._invoices = list(invoices)
+
+    def list_open_invoices(self) -> list:
+        return list(self._invoices)
 
 
 def build_tone_rewriter(config: Config) -> ToneRewriter:
@@ -445,6 +456,148 @@ def cmd_batches(config: Config, *, cancel_id: str | None, out: TextIO,
     return 0
 
 
+def _render_cron_summary(s: dict) -> str:
+    lines = [
+        f"[reminders cron-run] {s['outcome']}",
+        f"  as-of: {s['as_of']}   mode: {'DRY-RUN' if s['dry_run'] else 'LIVE'}",
+        f"  auto-{'would-send' if s['dry_run'] else 'sent'}: {s['auto_count']}"
+        f"   held-for-review: {s['held']}   quarantined: {s['quarantined']}",
+    ]
+    if s.get("held_batch_id"):
+        lines.append(f"  held batch {s['held_batch_id']} -> review with "
+                     f"`reminders approve {s['held_batch_id']}`")
+    for inv_id, reason in s.get("held_reasons", []):
+        lines.append(f"    HELD  {inv_id}: {reason}")
+    for inv_id, reason in s.get("quarantine", []):
+        lines.append(f"    QUARANTINE  {inv_id}: {reason}")
+    return "\n".join(lines)
+
+
+def _finish_cron(config: Config, out: TextIO, summary: dict, *, as_json: bool) -> None:
+    """Print the summary and best-effort email it to the operator (never lets a mail
+    failure change the run's exit code)."""
+    if as_json:
+        _emit_json(out, summary)
+    else:
+        _print(out, _render_cron_summary(summary))
+    to = config.automation.summary_to
+    if to:
+        try:
+            send_operator_email(config.smtp, to=to,
+                                subject=f"[invoice-reminders] cron-run: {summary['outcome']}",
+                                body=_render_cron_summary(summary))
+        except Exception as exc:  # mail must never break the run
+            _print(out, f"(warning: could not email run summary to {to}: {exc})")
+
+
+def cmd_cron_run(config: Config, *, as_of: date, env: Mapping[str, str], out: TextIO,
+                 notifier: Notifier | None = None, now: datetime | None = None,
+                 dry_run: bool = False, as_json: bool = False) -> int:
+    """Unattended send: stage -> auto-send the routine lane -> divert the irreversible
+    slice to the human queue, all behind fail-closed guards. See reminders.automation."""
+    from reminders import automation as A
+    from reminders.sources.csv_source import CsvInvoiceSource, DataIntegrityError
+
+    now = now or datetime.now(timezone.utc)
+
+    def refuse(reason: str) -> int:
+        _finish_cron(config, out, {
+            "outcome": f"REFUSED: {reason}", "as_of": as_of.isoformat(), "dry_run": dry_run,
+            "auto_count": 0, "held": 0, "held_batch_id": None, "quarantined": 0,
+            "quarantine": [], "held_reasons": [],
+        }, as_json=as_json)
+        return 2
+
+    # 1. authorization (fail closed). enabled + (for live) the env seatbelt + cap.
+    hold_path = config.automation.hold_flag_path
+    hold_exists = bool(hold_path) and Path(hold_path).exists()
+    for r in (A.refuse_if_disabled(config, hold_exists=hold_exists), A.refuse_if_no_cap(config)):
+        if r:
+            return refuse(r)
+    if not dry_run and env.get(ALLOW_SEND_ENV) != "1":
+        return refuse(f"{ALLOW_SEND_ENV}=1 is also required for a live unattended send")
+
+    # 2. freshness (csv only)
+    if config.source.kind == "csv" and config.source.csv_path:
+        try:
+            mtime = datetime.fromtimestamp(
+                Path(config.source.csv_path).stat().st_mtime, tz=timezone.utc)
+        except OSError as exc:
+            return refuse(f"cannot read the CSV export: {exc}")
+        r = A.refuse_if_stale(mtime, max_age_hours=config.automation.csv_max_age_hours, now=now)
+        if r:
+            return refuse(r)
+
+    # 3. load + quarantine (strict CSV: missing status/dnc column aborts)
+    try:
+        source = (CsvInvoiceSource(config.source.csv_path, strict=True)
+                  if config.source.kind == "csv" else build_source(config))
+        invoices = source.list_open_invoices()
+    except (DataIntegrityError, ValueError) as exc:
+        return refuse(f"export integrity: {exc}")
+    quarantined = list(getattr(source, "quarantined", []))
+    clean, amount_q = A.quarantine_invoices(invoices, config=config)
+    quarantined += amount_q
+
+    r = A.refuse_if_below_floor(len(clean), config=config)
+    if r:
+        return refuse(r)
+
+    # 4. due reminders over CLEAN invoices; which recipients are already known
+    store = open_store(config)
+    try:
+        pipeline = ReminderPipeline(
+            source=_ListInvoiceSource(clean),
+            policy=DunningPolicy(config.dunning.stages,
+                                 first_contact_stage_cap=config.dunning.first_contact_stage_cap),
+            templates=TemplateEngine(config.templates_dir, config.sender),
+            store=store)
+        reminders = pipeline.due_reminders(as_of)
+        known = {r.to_email for r in reminders if store.has_contacted_email(r.to_email)}
+    finally:
+        store.close()
+
+    # 5. partition into auto vs human-held (code-enforced gate)
+    auto, held = A.partition(reminders, config=config, known_recipients=known)
+
+    # 6. per-run cap on the auto lane
+    r = A.refuse_if_over_cap(len(auto), config=config)
+    if r:
+        return refuse(r)
+
+    held_batch_id = None
+    sent = 0
+    if not dry_run:
+        if auto:
+            auto_id = f"AUTO-{uuid.uuid4().hex[:10]}"
+            queue = open_queue(config)
+            try:
+                queue.enqueue(auto, batch_id=auto_id, created_at=now)
+            finally:
+                queue.close()
+            send_notifier = notifier or SMTPNotifier(config.smtp, allow_send=True)
+            results = approve_batch(config, auto_id, notifier=send_notifier,
+                                    rewriter=build_tone_rewriter(config))
+            sent = len(results)
+        if held:
+            held_batch_id = f"HELD-{uuid.uuid4().hex[:10]}"
+            queue = open_queue(config)
+            try:
+                queue.enqueue([r for r, _ in held], batch_id=held_batch_id, created_at=now)
+            finally:
+                queue.close()
+
+    _finish_cron(config, out, {
+        "outcome": "DRY-RUN" if dry_run else "COMPLETED",
+        "as_of": as_of.isoformat(), "dry_run": dry_run,
+        "auto_count": len(auto) if dry_run else sent,
+        "held": len(held), "held_batch_id": held_batch_id,
+        "quarantined": len(quarantined), "quarantine": quarantined,
+        "held_reasons": [(r.invoice_id, reason) for r, reason in held],
+    }, as_json=as_json)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # argparse wiring
 # --------------------------------------------------------------------------
@@ -503,10 +656,16 @@ def build_parser() -> argparse.ArgumentParser:
     batches_p.add_argument("--cancel", metavar="BATCH_ID",
                            help="discard a pending/approved batch (it can never be sent)")
 
+    cron_p = sub.add_parser("cron-run",
+                            help="unattended send: auto-send the routine lane, hold the rest "
+                                 "for review (needs automation.enabled)")
+    cron_p.add_argument("--dry-run", action="store_true",
+                        help="run all guards + partition but send nothing (canary mode)")
+
     # Also accept --json *after* the subcommand (e.g. `run --send --json`), the
     # natural spot for a command string. SUPPRESS keeps the global value from being
     # clobbered when the trailing flag is absent.
-    for p in (list_p, run_p, approve_p, hist_p, batches_p):
+    for p in (list_p, run_p, approve_p, hist_p, batches_p, cron_p):
         p.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                        help="emit one machine-readable JSON object on stdout")
 
@@ -537,6 +696,9 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None,
         return cmd_history(config, invoice_id=args.invoice, out=out, as_json=args.json)
     if args.command == "batches":
         return cmd_batches(config, cancel_id=args.cancel, out=out, as_json=args.json)
+    if args.command == "cron-run":
+        return cmd_cron_run(config, as_of=as_of, env=env, out=out,
+                            dry_run=bool(getattr(args, "dry_run", False)), as_json=args.json)
     parser.error(f"unknown command: {args.command}")  # pragma: no cover
     return 2
 

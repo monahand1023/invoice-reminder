@@ -79,3 +79,20 @@ smtp:
   use_tls: true
   username: "${SMTP_USERNAME}"       # from .env
   password: "${SMTP_PASSWORD}"       # from .env — Gmail app password, NOT your login
+
+# UNATTENDED (fully automated) send mode for `reminders cron-run`. Ships OFF.
+# When ON, a daily cron AUTO-SENDS the routine lane (friendly/firm, small amounts,
+# advertisers already contacted) and DIVERTS the irreversible slice — final notices,
+# high-value balances, and first-ever contacts — to the human approval queue.
+# That gate is ALSO enforced in code: no setting here can push a final notice or a
+# > $2,500 balance into the auto lane. See README "Running unattended".
+# Roll out carefully: dry-run canary first, then enabled with a tiny per-run cap.
+automation:
+  enabled: false                     # master kill switch (also needs REMINDERS_ALLOW_SEND=1)
+  # hold_flag_path: "/opt/invoice-reminder/HOLD"   # if this file exists, ALL sends pause
+  csv_max_age_hours: 26              # refuse to dun off an export older than this
+  auto_stages: ["friendly", "firm"]  # 'final' is never auto (enforced in code too)
+  max_auto_amount: 1000              # auto-send only at/below this (code caps at 2500)
+  max_send_per_run: 25               # refuse the whole batch if more than this would send
+  min_open_invoices: 1               # an empty/partial export is a LOUD failure, not "nothing due"
+  summary_to: ""                     # email address for the after-every-run summary + alerts

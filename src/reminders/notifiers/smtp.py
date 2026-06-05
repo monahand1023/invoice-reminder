@@ -54,3 +54,20 @@ class SMTPNotifier(Notifier):
             message_hash=reminder.message_hash,
             sent_at=datetime.now(timezone.utc),
         )
+
+
+def send_operator_email(smtp: SmtpConfig, *, to: str, subject: str, body: str) -> None:
+    """Best-effort plain email to a human operator (unattended run summaries/alerts).
+    Separate from the dunning path; callers should swallow failures so a mail outage
+    can't break the run itself (it still exits with the right code)."""
+    msg = EmailMessage()
+    msg["From"] = smtp.username or to
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(body)
+    with smtplib.SMTP(smtp.host, smtp.port) as server:
+        if smtp.use_tls:
+            server.starttls()
+        if smtp.username:
+            server.login(smtp.username, smtp.password)
+        server.send_message(msg)

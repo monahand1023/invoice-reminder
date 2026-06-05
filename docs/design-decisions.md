@@ -133,3 +133,39 @@ or needs a clickable approval — and if the latter, it must be a two-step POST 
 with a single-use, expiring token, **never** a bare GET link (mail-scanner link
 prefetch would auto-fire it and release a send with no human intent). This is the
 real fork between cron+CLI and n8n for a non-technical operator.
+
+## Decision 7 — fully automated under cron: auto the routine, hard-gate the rest
+
+Dan's goal is to eliminate the manual dunning work entirely (no n8n, plain cron). A
+second adversarial review (three failure-mode lenses → spec → red-team) pressure-
+tested unattended sending before any code. The honest verdict: **you cannot safely
+fully-automate the irreversible cases off a human-exported flat CSV.** The export can
+be *confidently wrong* (a paid invoice still marked open; mtime is falsifiable by an
+Excel re-save or a Drive sync; the real Magazine Manager export has no report-date
+column), and the human approval keystroke was exactly the "wait, they paid last week"
+catch being removed. The literal "$100K FINAL auto-sent" is preventable; friendly/firm
+dunning of a paying advertiser is not, off a flat file.
+
+So "fully automated" was implemented as: **auto-send the routine lane, divert the
+irreversible slice to a human.**
+
+- **Code-enforced gate (not config):** `reminders.automation` holds every `final`
+  notice, any amount over a hard `$2,500` ceiling, and every first-ever contact to a
+  new advertiser — for human `approve`. Config can only make the gate *more*
+  conservative; no YAML edit can widen it. This replaces the old structural
+  two-seatbelt gate with a gate that still can't be config-disabled.
+- **Guards are the safety now** (every one fails *closed* — refuse the whole run +
+  alert, never a partial blast): kill switch (`enabled` + `REMINDERS_ALLOW_SEND` +
+  a `HOLD` file), CSV freshness, required cap, per-run cap, volume floor, strict
+  ingest (unknown status quarantined not coerced to open; required status/DNC columns;
+  amount band + email validation), single summary email after every run.
+- **Ships dark, rolled out via canary:** `cron-run --dry-run` (all guards, sends
+  nothing) → `enabled` with `max_send_per_run: 1`, friendly-only → ramp. FINAL,
+  high-value, and first-contact stay human-gated permanently — that is the floor,
+  not a ramp step.
+
+Deferred hardening for before heavier live use (the canary phase surfaces these):
+two-phase reserve-before-send for wire-idempotency, a durable suppression list that
+survives a dropped DNC column, an export-schema fingerprint, an independent alert
+channel (today the summary rides the same SMTP as the sends), and a dead-man's-switch
+on "no successful run in N hours."

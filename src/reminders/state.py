@@ -88,6 +88,13 @@ class ReminderStateStore:
         """True if anything has ever been sent. Used to detect a cold start."""
         return self._conn.execute("SELECT 1 FROM sent_reminders LIMIT 1").fetchone() is not None
 
+    def has_contacted_email(self, to_email: str) -> bool:
+        """True if this recipient has ever been sent anything. Unattended auto-send
+        holds the first-ever contact to a new advertiser for human review."""
+        return self._conn.execute(
+            "SELECT 1 FROM sent_reminders WHERE to_email = ? LIMIT 1", (to_email,)
+        ).fetchone() is not None
+
     # --- tone-rewrite cache (only used when the LLM seam is enabled) -------
 
     def get_cached_rewrite(self, invoice_id: str, stage: str, *, source_hash: str) -> str | None:
