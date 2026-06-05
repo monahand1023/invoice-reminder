@@ -52,10 +52,10 @@ def test_stages_parsed_in_order(tmp_path):
 
 
 def test_env_vars_are_expanded_for_secrets(tmp_path, monkeypatch):
-    monkeypatch.setenv("SMTP_USERNAME", "real-user@gmail.com")
+    monkeypatch.setenv("SMTP_USERNAME", "smtp-user@example.com")
     monkeypatch.setenv("SMTP_PASSWORD", "app-specific-secret")
     cfg = load_config(write_cfg(tmp_path))
-    assert cfg.smtp.username == "real-user@gmail.com"
+    assert cfg.smtp.username == "smtp-user@example.com"
     assert cfg.smtp.password == "app-specific-secret"
 
 
