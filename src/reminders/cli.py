@@ -235,7 +235,7 @@ def _print(out: TextIO, *lines: str) -> None:
 
 
 def _emit_json(out: TextIO, obj) -> None:
-    """Write a single JSON object (the whole stdout) for n8n / scripting."""
+    """Write a single JSON object (the whole stdout) for scripting / monitoring."""
     out.write(json.dumps(obj) + "\n")
 
 
@@ -631,7 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="path to config.yaml (default: config.yaml then config.example.yaml)")
     parser.add_argument("--as-of", help="evaluate as of this date (YYYY-MM-DD); default: today")
     parser.add_argument("--json", action="store_true",
-                        help="emit one machine-readable JSON object on stdout (for n8n / scripting)")
+                        help="emit one machine-readable JSON object on stdout (scripting / monitoring)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     list_p = sub.add_parser("list-due", help="show invoices due for a reminder now (read-only)")

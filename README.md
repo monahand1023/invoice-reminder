@@ -18,9 +18,8 @@ either **fully automated** (`cron-run` auto-sends the routine lane and holds the
 risky slice for a human) or **manual-approve** — one runtime, one SQLite file. The QuickBooks Online /
 Desktop adapters are **blueprinted and unit-tested but not verified against a live
 tenant** (and QuickBooks Desktop additionally needs a SOAP host that isn't in this
-repo) — build exactly one, for real, once you confirm where the data lives. An
-**optional** n8n workflow is included for shops that already run n8n
-(see ["Running on a schedule"](#running-on-a-schedule-cron-first-n8n-optional)).
+repo) — build exactly one, for real, once you confirm where the data lives
+(see ["Running on a schedule"](#running-on-a-schedule)).
 
 ---
 
@@ -219,8 +218,8 @@ password**, not your login), set `REMINDERS_ALLOW_SEND=1`, then `run --send` and
 | `cron-run [--dry-run]` | Unattended: auto-sends the routine lane, diverts final/high-value/first-contact to the human queue, behind fail-closed guards. Needs `automation.enabled` + `REMINDERS_ALLOW_SEND=1`. `--dry-run` sends nothing. | **Yes** |
 
 > Add `--json` to any command (before or after the subcommand) for one
-> machine-readable JSON object on stdout — that's the surface the n8n workflow and
-> any script consume.
+> machine-readable JSON object on stdout — handy for scripting or monitoring
+> (e.g. parsing the `cron-run` summary).
 >
 > **Cold-start safety.** The first `run --send` against a real source (csv /
 > quickbooks_\*) with an empty audit trail and no `first_contact_stage_cap` is
@@ -328,7 +327,7 @@ one: where does the overdue list actually come from? Four paths, best to last re
 
 ---
 
-## Running on a schedule (cron first, n8n optional)
+## Running on a schedule
 
 One small publisher, one runtime, nothing extra to host. Two ways to schedule it —
 **fully automated** (recommended for hands-off), or **manual approval** (most
@@ -378,39 +377,10 @@ REMINDERS_ALLOW_SEND=1 reminders run --send            # stage a batch -> prints
 REMINDERS_ALLOW_SEND=1 reminders approve <batch-id>    # the only step that emails
 ```
 
-Every money guarantee lives in the tested Python core — no second system owns any of it.
-
-### Optional: n8n (only if you already run it)
-
-If n8n is already your automation hub, an importable workflow is in
-[`integrations/n8n/`](integrations/n8n/). **n8n does the glue, not the logic** — it
-*invokes* the tested core, never re-implements it:
-
-| Concern | Who does it |
-|---|---|
-| Schedule / trigger | n8n **Schedule Trigger** (or manual) |
-| Stage a batch | n8n **Execute Command** → `reminders run --send --json` |
-| Human approval | n8n **Wait** node (resume-on-webhook) + your Slack/Email node |
-| Send + record | n8n **Execute Command** → `reminders approve <id> --json` |
-| Who's overdue / which stage | the Python `DunningPolicy` (deterministic, tested) — **not** a Function node |
-| "Never send twice" + audit | the Python state store (`UNIQUE(invoice_id, stage)` + message hashes) |
-
-Why not rebuild the logic *natively* in n8n Function nodes? You'd throw away exactly
-what makes this safe for five-figure invoices: the unit-tested stage selection, the
-hard idempotency guarantee (a DB constraint, not a hope), and the audit trail. So
-the workflow **invokes** the tested core through its `--json` CLI instead of
-re-implementing it. Both seatbelts survive the port: `REMINDERS_ALLOW_SEND=1` on the
-command nodes, and the Wait node as the human gate — **nothing sends without
-approval.**
-
-**Honest caveats for the n8n path:** it is **self-hosted only** — the Execute
-Command node is disabled on n8n Cloud — and the approval-notification node is a
-**stub you must wire** to your Slack/Email (out of the box the approve link only
-lands in the execution log). If you're *not* already running n8n, the cron + CLI
-above is strictly less to own for the same result. Either way, **never add a native
-Gmail/SMTP send node** — only `reminders approve` may send, or you bypass the
-`UNIQUE(invoice_id, stage)` idempotency constraint and the audit trail. Full setup
-in [`integrations/n8n/README.md`](integrations/n8n/README.md).
+Every money guarantee lives in the tested Python core — one runtime, no second
+system to install, secure, or back up. (A workflow-orchestrator like n8n was
+evaluated and deliberately *not* used: it would be a second runtime that owns none
+of the correctness guarantees — see `docs/design-decisions.md`, Decision 4.)
 
 ---
 
@@ -471,17 +441,17 @@ invoice-reminder/
   docs/       design-decisions.md
   src/reminders/
     models.py  config.py  policy.py  templates.py  state.py  approval.py
-    pipeline.py  cli.py  tone.py
+    pipeline.py  cli.py  tone.py  automation.py
     sources/   base.py  mock.py  csv_source.py
                quickbooks_online.py  _qbo_client.py  quickbooks_desktop.py
                magazine_manager.py
     notifiers/ base.py  console.py  smtp.py
   templates/  friendly.txt.j2  firm.txt.j2  final.txt.j2
   fixtures/   sample_invoices.json  magazine_manager_ar_export_sample.csv
-  integrations/n8n/  invoice-reminders.workflow.json  README.md
   tests/      test_policy.py  test_idempotency.py  test_dry_run_never_sends.py
               test_templates.py  test_models.py  test_config.py  test_mock_source.py
               test_state.py  test_approval.py  test_notifiers.py  test_pipeline.py
-              test_tone.py  test_csv_source.py  test_json_output.py
+              test_tone.py  test_csv_source.py  test_json_output.py  test_batches.py
+              test_cold_start.py  test_automation.py  test_cron_run.py
               test_quickbooks_online.py  test_quickbooks_desktop.py
 ```

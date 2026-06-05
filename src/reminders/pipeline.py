@@ -5,9 +5,8 @@ Wires the four pluggable pieces together and produces the list of reminders due
 stages already sent) but never writes and never sends. Writing/sending is the
 caller's job, and only after approval.
 
-This is the unit that maps onto an n8n flow: source = QuickBooks node, policy +
-templates = Function node, store lookup = a dedup check. Keeping it free of I/O
-side effects is what makes that port clean.
+Keeping it free of I/O side effects is what makes it easy to test and to drive
+from a plain scheduled job (cron): build it, call ``due_reminders(as_of)``, done.
 """
 from __future__ import annotations
 

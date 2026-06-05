@@ -72,22 +72,18 @@ All adapters share one principle: **pure mapping/parsing split from injectable
 transport, stdlib-only, import-safe, fully tested offline** — credentials and the
 network are never required to run the tests.
 
-## Decision 4 — n8n orchestrates the tested core (built)
+## Decision 4 — n8n (or any workflow orchestrator): considered and rejected
 
-n8n is an excellent fit for the *shape* of this job (schedule → fetch → approve →
-send), so we built an importable workflow in `integrations/n8n/` plus a `--json`
-output mode on the CLI for it to call. The deliberate boundary: n8n **orchestrates
-around** the tested Python core (Schedule Trigger, a human-approval Wait node,
-invoking the CLI) and never **replaces** it. Rebuilding the policy / idempotency /
-audit as untested Function nodes would throw away exactly what makes this safe for
-five-figure invoices, so the workflow shells out to `reminders run --send --json`
-and `reminders approve <id> --json` instead. Both seatbelts survive the port.
-
-Honest caveat: for a strict MVP, a leaner n8n-native build (logic in Function nodes)
-would be less to own — defensible at low stakes. We kept the tested core because the
-correctness guarantees (deterministic stage selection, a `UNIQUE(invoice, stage)`
-idempotency constraint, the audit trail) are the part worth owning regardless of
-which orchestrator wraps it.
+n8n fits the *shape* of this job (schedule → fetch → approve → send), and an
+importable workflow was briefly built to explore it. It was then **removed**: the
+publisher does not run n8n, and a workflow orchestrator would be a **second runtime**
+(Node + its own DB + a webhook) that owns **none** of the correctness guarantees —
+those live entirely in the tested Python core. "More n8n" is the wrong direction for
+one small publisher; rebuilding the policy / idempotency / audit as untested Function
+nodes would throw away exactly what makes this safe for five-figure invoices. The
+deployment is plain **cron + the CLI** (Decision 6 / 7): one runtime, one SQLite
+file. The only artifact kept from that exploration is the general `--json` output
+mode (useful for scripting and parsing the `cron-run` summary).
 
 ## Decision 5 — diagrams
 
@@ -108,11 +104,10 @@ built before the source was confirmed, and n8n positioned as a co-equal layer.
 
 Resulting decisions:
 
-- **Recommended deployment is cron + the CLI, not n8n.** For one small publisher,
-  n8n is a second runtime that owns no correctness guarantee; "more n8n" is the
-  wrong direction. n8n stays in the repo as a clearly-labeled *optional* integration
-  for shops already running it (self-hosted only; approval-notification node is a
-  stub to wire). The Python core is unconditionally primary and self-sufficient.
+- **Deployment is cron + the CLI, not n8n.** For one small publisher, n8n is a
+  second runtime that owns no correctness guarantee; "more n8n" is the wrong
+  direction (the exploratory n8n workflow was subsequently removed — see Decision 4).
+  The Python core is unconditionally primary and self-sufficient.
 - **Cold-start safety is now enforced in code,** not a config footnote: the first
   real `run --send` with an empty history and no `first_contact_stage_cap` is
   refused (override with `--allow-cold-start`). This was the single highest

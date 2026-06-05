@@ -1,7 +1,7 @@
-"""--json output mode: the machine-readable surface n8n (or any script) calls.
+"""--json output mode: the machine-readable surface for scripting / monitoring.
 
-Every command emits a single JSON object on stdout so an orchestrator can parse
-batch ids, counts, and results instead of scraping human tables.
+Every command emits a single JSON object on stdout so a script can parse batch
+ids, counts, and results instead of scraping human tables.
 """
 import io
 import json
