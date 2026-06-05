@@ -72,15 +72,22 @@ All adapters share one principle: **pure mapping/parsing split from injectable
 transport, stdlib-only, import-safe, fully tested offline** — credentials and the
 network are never required to run the tests.
 
-## Decision 4 — n8n is an orchestrator, not a replacement (deferred)
+## Decision 4 — n8n orchestrates the tested core (built)
 
-The README's "maps to n8n" section is a *target mapping*, not built — and whether
-n8n is the deployment target is itself open. The stance: if/when n8n is used, it
-**orchestrates around** the tested Python core (Schedule Trigger, human-approval
-routing) and never **replaces** it (rebuilding the policy/idempotency/audit as
-untested nodes would throw away exactly what makes this safe). Nothing n8n is built
-in this pass; the Python service owns the QuickBooks fetch so the adapters are the
-right investment with or without n8n.
+n8n is an excellent fit for the *shape* of this job (schedule → fetch → approve →
+send), so we built an importable workflow in `integrations/n8n/` plus a `--json`
+output mode on the CLI for it to call. The deliberate boundary: n8n **orchestrates
+around** the tested Python core (Schedule Trigger, a human-approval Wait node,
+invoking the CLI) and never **replaces** it. Rebuilding the policy / idempotency /
+audit as untested Function nodes would throw away exactly what makes this safe for
+five-figure invoices, so the workflow shells out to `reminders run --send --json`
+and `reminders approve <id> --json` instead. Both seatbelts survive the port.
+
+Honest caveat: for a strict MVP, a leaner n8n-native build (logic in Function nodes)
+would be less to own — defensible at low stakes. We kept the tested core because the
+correctness guarantees (deterministic stage selection, a `UNIQUE(invoice, stage)`
+idempotency constraint, the audit trail) are the part worth owning regardless of
+which orchestrator wraps it.
 
 ## Decision 5 — diagrams
 

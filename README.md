@@ -14,8 +14,9 @@ staffer who does it by hand.
 invoices (or the built-in mock fixtures) and it shows exactly what it *would* send
 — nothing leaves without explicit human approval. Real billing-system adapters
 (QuickBooks Online / Desktop) are built and ready to switch on once the data source
-is confirmed. The deterministic pieces are kept isolated and portable, so they also
-map cleanly onto n8n nodes (see ["How this maps to n8n"](#how-this-maps-to-n8n)).
+is confirmed. The deterministic pieces are kept isolated and portable, and an
+importable **n8n workflow** runs the whole loop on a schedule with human approval
+(see ["How this maps to n8n"](#how-this-maps-to-n8n)).
 
 ---
 
@@ -309,23 +310,29 @@ one: where does the overdue list actually come from? Four paths, best to last re
 
 ## How this maps to n8n
 
-The production deployment will likely run in n8n. The Python components were kept
-isolated and portable specifically so the port is a node-for-node swap:
+**There's a working, importable workflow** in
+[`integrations/n8n/`](integrations/n8n/) — import `invoice-reminders.workflow.json`
+and you get the scheduled dunning loop with human approval. n8n is the
+**orchestrator**; the tested Python core still makes every money-touching decision.
 
-| Python component | n8n node |
+The deliberate choice: **n8n does the glue, not the logic.**
+
+| Concern | Who does it |
 |---|---|
-| Cron / scheduled invocation | **Schedule Trigger** node |
-| `MockInvoiceSource` → real `InvoiceSource` | **QuickBooks** node (or HTTP Request / custom node) |
-| `DunningPolicy` (stage selection) | **Function** (Code) node — same deterministic rules |
-| `TemplateEngine` (Jinja2 copy) | **Set / Function** node (or n8n templating) |
-| `ReminderStateStore` (idempotency + audit) | a datastore node (Postgres/Airtable/n8n static data) keyed on `(invoice_id, stage)` |
-| `ApprovalQueue` + `approve` | **Wait** node / human-in-the-loop approval pattern (e.g. webhook/Slack/email approval) before the send branch |
-| `SMTPNotifier` | **Send Email** node |
+| Schedule / trigger | n8n **Schedule Trigger** (or manual) |
+| Stage a batch | n8n **Execute Command** → `reminders run --send --json` |
+| Human approval | n8n **Wait** node (resume-on-webhook) + your Slack/Email node |
+| Send + record | n8n **Execute Command** → `reminders approve <id> --json` |
+| Who's overdue / which stage | the Python `DunningPolicy` (deterministic, tested) — **not** a Function node |
+| "Never send twice" + audit | the Python state store (`UNIQUE(invoice_id, stage)` + message hashes) |
 
-Because the policy is pure and the state check is just a keyed lookup, the
-Function node and the dedup datastore carry over almost verbatim. The human
-approval requirement maps directly onto n8n's Wait/approval pattern — **the v1
-"nothing sends without approval" rule is preserved in the n8n port.**
+Why not rebuild the logic *natively* in n8n Function nodes? You'd throw away exactly
+what makes this safe for five-figure invoices: the unit-tested stage selection, the
+hard idempotency guarantee (a DB constraint, not a hope), and the audit trail. So
+the workflow **invokes** the tested core through its `--json` CLI instead of
+re-implementing it. Both seatbelts survive the port: `REMINDERS_ALLOW_SEND=1` on the
+command nodes, and the Wait node as the human gate — **nothing sends without
+approval.** Details in [`integrations/n8n/README.md`](integrations/n8n/README.md).
 
 ---
 
@@ -393,9 +400,10 @@ invoice-reminder/
     notifiers/ base.py  console.py  smtp.py
   templates/  friendly.txt.j2  firm.txt.j2  final.txt.j2
   fixtures/   sample_invoices.json  magazine_manager_ar_export_sample.csv
+  integrations/n8n/  invoice-reminders.workflow.json  README.md
   tests/      test_policy.py  test_idempotency.py  test_dry_run_never_sends.py
               test_templates.py  test_models.py  test_config.py  test_mock_source.py
               test_state.py  test_approval.py  test_notifiers.py  test_pipeline.py
-              test_tone.py  test_csv_source.py
+              test_tone.py  test_csv_source.py  test_json_output.py
               test_quickbooks_online.py  test_quickbooks_desktop.py
 ```

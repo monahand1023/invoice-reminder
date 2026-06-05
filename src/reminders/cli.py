@@ -19,6 +19,7 @@ an injected notifier instead of hitting SMTP.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import uuid
 from datetime import date, datetime, timezone
@@ -194,12 +195,35 @@ def _print(out: TextIO, *lines: str) -> None:
         out.write(line + "\n")
 
 
+def _emit_json(out: TextIO, obj) -> None:
+    """Write a single JSON object (the whole stdout) for n8n / scripting."""
+    out.write(json.dumps(obj) + "\n")
+
+
+def _reminder_json(r: Reminder) -> dict:
+    # amount is Decimal -> serialize as a string to stay exact.
+    return {
+        "invoice_id": r.invoice_id,
+        "stage": r.stage,
+        "tone": r.tone,
+        "days_overdue": r.days_overdue,
+        "amount": str(r.amount),
+        "currency": r.currency,
+        "customer_name": r.customer_name,
+        "to_email": r.to_email,
+    }
+
+
 # --------------------------------------------------------------------------
 # Command implementations (print + return exit code)
 # --------------------------------------------------------------------------
 
-def cmd_list_due(config: Config, *, as_of: date, out: TextIO) -> int:
+def cmd_list_due(config: Config, *, as_of: date, out: TextIO, as_json: bool = False) -> int:
     reminders = due_reminders(config, as_of)
+    if as_json:
+        _emit_json(out, {"as_of": as_of.isoformat(), "count": len(reminders),
+                         "reminders": [_reminder_json(r) for r in reminders]})
+        return 0
     _print(out, f"Invoices due for a reminder as of {as_of.isoformat()}:")
     if not reminders:
         _print(out, "  (none)")
@@ -219,10 +243,16 @@ def cmd_list_due(config: Config, *, as_of: date, out: TextIO) -> int:
     return 0
 
 
-def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], out: TextIO) -> int:
+def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], out: TextIO,
+            as_json: bool = False) -> int:
     if not send:
         # DRY-RUN (default): render + print via console, record nothing, send nothing.
         reminders = due_reminders(config, as_of)
+        if as_json:
+            _emit_json(out, {"mode": "dry-run", "as_of": as_of.isoformat(),
+                             "count": len(reminders),
+                             "reminders": [_reminder_json(r) for r in reminders]})
+            return 0
         _print(out,
                f"DRY-RUN — as of {as_of.isoformat()}. Nothing is sent; nothing is recorded.",
                f"{len(reminders)} reminder(s) would be sent:\n")
@@ -235,6 +265,10 @@ def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], 
 
     # --send: SEATBELT #2 — refuse unless REMINDERS_ALLOW_SEND=1.
     if env.get(ALLOW_SEND_ENV) != "1":
+        if as_json:
+            _emit_json(out, {"error": "seatbelt_required",
+                             "message": f"{ALLOW_SEND_ENV}=1 required to stage a send batch"})
+            return 2
         _print(out,
                "REFUSED: `run --send` requires the seatbelt environment variable.",
                f"  Set {ALLOW_SEND_ENV}=1 to stage a real send batch.",
@@ -242,6 +276,11 @@ def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], 
         return 2
 
     batch = stage_batch(config, as_of)
+    if as_json:
+        _emit_json(out, {"batch_id": batch.batch_id, "as_of": as_of.isoformat(),
+                         "count": len(batch.reminders),
+                         "reminders": [_reminder_json(r) for r in batch.reminders]})
+        return 0
     _print(out,
            f"Staged a send batch (NOTHING SENT YET) as of {as_of.isoformat()}.",
            f"  batch-id : {batch.batch_id}",
@@ -257,9 +296,13 @@ def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], 
 
 
 def cmd_approve(config: Config, *, batch_id: str, env: Mapping[str, str], out: TextIO,
-                notifier: Notifier | None = None) -> int:
+                notifier: Notifier | None = None, as_json: bool = False) -> int:
     # SEATBELT #2 again — approving is the moment real email would go out.
     if env.get(ALLOW_SEND_ENV) != "1":
+        if as_json:
+            _emit_json(out, {"error": "seatbelt_required", "batch_id": batch_id,
+                             "message": f"{ALLOW_SEND_ENV}=1 required to approve a batch"})
+            return 2
         _print(out,
                "REFUSED: approving a batch sends real email and requires the seatbelt.",
                f"  Set {ALLOW_SEND_ENV}=1 to allow sending.")
@@ -273,8 +316,18 @@ def cmd_approve(config: Config, *, batch_id: str, env: Mapping[str, str], out: T
             config, batch_id, notifier=notifier, rewriter=build_tone_rewriter(config)
         )
     except Exception as exc:  # UnknownBatchError etc. -> clear message, nonzero exit
+        if as_json:
+            _emit_json(out, {"error": "approve_failed", "batch_id": batch_id, "message": str(exc)})
+            return 1
         _print(out, f"ERROR approving batch {batch_id}: {exc}")
         return 1
+
+    if as_json:
+        _emit_json(out, {"batch_id": batch_id, "sent": len(results),
+                         "results": [{"invoice_id": r.invoice_id, "stage": r.stage,
+                                      "channel": r.channel, "detail": r.detail}
+                                     for r in results]})
+        return 0
 
     _print(out, f"Approved batch {batch_id}. Sent {len(results)} reminder(s):")
     for r in results:
@@ -284,12 +337,20 @@ def cmd_approve(config: Config, *, batch_id: str, env: Mapping[str, str], out: T
     return 0
 
 
-def cmd_history(config: Config, *, invoice_id: str | None, out: TextIO) -> int:
+def cmd_history(config: Config, *, invoice_id: str | None, out: TextIO,
+                as_json: bool = False) -> int:
     store = open_store(config)
     try:
         rows = store.history(invoice_id=invoice_id)
     finally:
         store.close()
+    if as_json:
+        _emit_json(out, {"count": len(rows), "records": [
+            {"invoice_id": r.invoice_id, "stage": r.stage, "channel": r.channel,
+             "sent_at": r.sent_at, "to_email": r.to_email, "batch_id": r.batch_id,
+             "message_hash": r.message_hash}
+            for r in rows]})
+        return 0
     scope = f" for {invoice_id}" if invoice_id else ""
     _print(out, f"Audit trail{scope} — {len(rows)} record(s):")
     if not rows:
@@ -336,9 +397,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", help="path to config.yaml (default: config.yaml then config.example.yaml)")
     parser.add_argument("--as-of", help="evaluate as of this date (YYYY-MM-DD); default: today")
+    parser.add_argument("--json", action="store_true",
+                        help="emit one machine-readable JSON object on stdout (for n8n / scripting)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list-due", help="show invoices due for a reminder now (read-only)")
+    list_p = sub.add_parser("list-due", help="show invoices due for a reminder now (read-only)")
 
     run_p = sub.add_parser("run", help="render reminders (dry-run by default)")
     mode = run_p.add_mutually_exclusive_group()
@@ -352,6 +415,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     hist_p = sub.add_parser("history", help="dump the audit trail")
     hist_p.add_argument("--invoice", help="filter to a single invoice id")
+
+    # Also accept --json *after* the subcommand (e.g. `run --send --json`), the
+    # natural spot for a command string. SUPPRESS keeps the global value from being
+    # clobbered when the trailing flag is absent.
+    for p in (list_p, run_p, approve_p, hist_p):
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                       help="emit one machine-readable JSON object on stdout")
 
     return parser
 
@@ -369,13 +439,14 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None,
     as_of = _parse_as_of(args.as_of)
 
     if args.command == "list-due":
-        return cmd_list_due(config, as_of=as_of, out=out)
+        return cmd_list_due(config, as_of=as_of, out=out, as_json=args.json)
     if args.command == "run":
-        return cmd_run(config, as_of=as_of, send=bool(args.send), env=env, out=out)
+        return cmd_run(config, as_of=as_of, send=bool(args.send), env=env, out=out,
+                       as_json=args.json)
     if args.command == "approve":
-        return cmd_approve(config, batch_id=args.batch_id, env=env, out=out)
+        return cmd_approve(config, batch_id=args.batch_id, env=env, out=out, as_json=args.json)
     if args.command == "history":
-        return cmd_history(config, invoice_id=args.invoice, out=out)
+        return cmd_history(config, invoice_id=args.invoice, out=out, as_json=args.json)
     parser.error(f"unknown command: {args.command}")  # pragma: no cover
     return 2
 
