@@ -1,5 +1,8 @@
 # Invoice Reminders — automated dunning for a magazine publisher
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
 A small, well-tested **workflow-automation (RPA)** tool that finds overdue
 advertiser invoices and sends staged payment reminders ("dunning"), replacing a
 staffer who does it by hand.

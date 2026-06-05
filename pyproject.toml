@@ -7,6 +7,7 @@ name = "invoice-reminders"
 version = "0.1.0"
 description = "Deterministic accounts-receivable (dunning) reminder tool for a magazine publisher"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
