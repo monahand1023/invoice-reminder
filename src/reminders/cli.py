@@ -27,7 +27,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Mapping, Sequence, TextIO
 
-from reminders.approval import ApprovalQueue, Batch
+from reminders.approval import ApprovalError, ApprovalQueue, Batch
 from reminders.config import Config, load_config
 from reminders.models import Reminder, SendResult
 from reminders.notifiers.base import Notifier
@@ -103,6 +103,32 @@ def open_store(config: Config) -> ReminderStateStore:
     return ReminderStateStore(config.state.db_path)
 
 
+def cold_start_refusal(config: Config, *, allow_cold_start: bool) -> str | None:
+    """Return a refusal message if staging a send now would be a risky cold start.
+
+    Risky = a REAL source (not the mock demo) + an EMPTY audit trail (nothing ever
+    sent) + NO first_contact_stage_cap configured. In that exact situation the very
+    first unattended run would open a long-overdue backlog with FINAL notices. We
+    enforce the cap-or-acknowledge decision in code so it can't be lost by copying
+    the demo config (which ships the cap off). Returns None when it's safe."""
+    if allow_cold_start or config.source.kind == "mock":
+        return None
+    if config.dunning.first_contact_stage_cap is not None:
+        return None
+    store = open_store(config)
+    try:
+        if store.has_any_sends():
+            return None
+    finally:
+        store.close()
+    return (
+        "REFUSED (cold start): this is the first send against a real source and no "
+        "`dunning.first_contact_stage_cap` is set, so a long-overdue backlog would "
+        "open with FINAL notices. Set `first_contact_stage_cap: \"friendly\"` in "
+        "config.yaml (recommended), or pass --allow-cold-start to proceed anyway."
+    )
+
+
 def open_queue(config: Config) -> ApprovalQueue:
     return ApprovalQueue(config.state.db_path)
 
@@ -161,6 +187,8 @@ def approve_batch(
             queue.approve(batch_id)        # pending -> approved
         elif batch.status == "sent":
             return results                  # nothing to do
+        elif batch.status == "canceled":
+            raise ApprovalError(f"batch {batch_id} was canceled; refusing to send")
         # status 'approved' (incl. a resumed/interrupted run) falls through
 
         for reminder in batch.reminders:
@@ -244,7 +272,7 @@ def cmd_list_due(config: Config, *, as_of: date, out: TextIO, as_json: bool = Fa
 
 
 def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], out: TextIO,
-            as_json: bool = False) -> int:
+            as_json: bool = False, allow_cold_start: bool = False) -> int:
     if not send:
         # DRY-RUN (default): render + print via console, record nothing, send nothing.
         reminders = due_reminders(config, as_of)
@@ -273,6 +301,16 @@ def cmd_run(config: Config, *, as_of: date, send: bool, env: Mapping[str, str], 
                "REFUSED: `run --send` requires the seatbelt environment variable.",
                f"  Set {ALLOW_SEND_ENV}=1 to stage a real send batch.",
                "  (Even then, nothing leaves until you run `approve <batch-id>`.)")
+        return 2
+
+    # Cold-start money-safety: don't let the first unattended real run open a
+    # backlog with FINAL notices (see cold_start_refusal).
+    refusal = cold_start_refusal(config, allow_cold_start=allow_cold_start)
+    if refusal is not None:
+        if as_json:
+            _emit_json(out, {"error": "cold_start_unsafe", "message": refusal})
+            return 2
+        _print(out, refusal)
         return 2
 
     batch = stage_batch(config, as_of)
@@ -365,6 +403,48 @@ def cmd_history(config: Config, *, invoice_id: str | None, out: TextIO,
     return 0
 
 
+def cmd_batches(config: Config, *, cancel_id: str | None, out: TextIO,
+                as_json: bool = False) -> int:
+    queue = open_queue(config)
+    try:
+        if cancel_id is not None:
+            try:
+                queue.cancel(cancel_id)
+            except Exception as exc:   # UnknownBatchError / ApprovalError
+                if as_json:
+                    _emit_json(out, {"error": "cancel_failed", "batch_id": cancel_id,
+                                     "message": str(exc)})
+                else:
+                    _print(out, f"ERROR canceling {cancel_id}: {exc}")
+                return 1
+            if as_json:
+                _emit_json(out, {"canceled": cancel_id})
+            else:
+                _print(out, f"Canceled batch {cancel_id}.")
+            return 0
+        summaries = queue.list_batches()
+    finally:
+        queue.close()
+
+    if as_json:
+        _emit_json(out, {"count": len(summaries), "batches": [
+            {"batch_id": b.batch_id, "status": b.status, "created_at": b.created_at,
+             "count": b.count} for b in summaries]})
+        return 0
+    _print(out, f"Approval batches — {len(summaries)} total:")
+    if not summaries:
+        _print(out, "  (none)")
+        return 0
+    _print(out, f"  {'BATCH':<16} {'STATUS':<10} {'COUNT':>5}  CREATED")
+    for b in summaries:
+        _print(out, f"  {b.batch_id:<16} {b.status:<10} {b.count:>5}  {b.created_at}")
+    pending = sum(1 for b in summaries if b.status == "pending")
+    if pending:
+        _print(out, f"\n{pending} pending batch(es). Approve with `approve <batch-id>` "
+                    f"or discard with `batches --cancel <batch-id>`.")
+    return 0
+
+
 # --------------------------------------------------------------------------
 # argparse wiring
 # --------------------------------------------------------------------------
@@ -409,6 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="render & print via console; send/record nothing (DEFAULT)")
     mode.add_argument("--send", action="store_true",
                       help="stage a real send batch for approval (needs REMINDERS_ALLOW_SEND=1)")
+    run_p.add_argument("--allow-cold-start", action="store_true",
+                       help="acknowledge a first real send with no first_contact_stage_cap set")
 
     approve_p = sub.add_parser("approve", help="release an approved batch to the SMTP notifier")
     approve_p.add_argument("batch_id", help="the batch-id printed by `run --send`")
@@ -416,10 +498,15 @@ def build_parser() -> argparse.ArgumentParser:
     hist_p = sub.add_parser("history", help="dump the audit trail")
     hist_p.add_argument("--invoice", help="filter to a single invoice id")
 
+    batches_p = sub.add_parser("batches",
+                               help="list staged approval batches; --cancel to discard one")
+    batches_p.add_argument("--cancel", metavar="BATCH_ID",
+                           help="discard a pending/approved batch (it can never be sent)")
+
     # Also accept --json *after* the subcommand (e.g. `run --send --json`), the
     # natural spot for a command string. SUPPRESS keeps the global value from being
     # clobbered when the trailing flag is absent.
-    for p in (list_p, run_p, approve_p, hist_p):
+    for p in (list_p, run_p, approve_p, hist_p, batches_p):
         p.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                        help="emit one machine-readable JSON object on stdout")
 
@@ -442,11 +529,14 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None,
         return cmd_list_due(config, as_of=as_of, out=out, as_json=args.json)
     if args.command == "run":
         return cmd_run(config, as_of=as_of, send=bool(args.send), env=env, out=out,
-                       as_json=args.json)
+                       as_json=args.json,
+                       allow_cold_start=getattr(args, "allow_cold_start", False))
     if args.command == "approve":
         return cmd_approve(config, batch_id=args.batch_id, env=env, out=out, as_json=args.json)
     if args.command == "history":
         return cmd_history(config, invoice_id=args.invoice, out=out, as_json=args.json)
+    if args.command == "batches":
+        return cmd_batches(config, cancel_id=args.cancel, out=out, as_json=args.json)
     parser.error(f"unknown command: {args.command}")  # pragma: no cover
     return 2
 

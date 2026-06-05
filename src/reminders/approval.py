@@ -102,6 +102,16 @@ class ApprovalQueue:
         )
         self._conn.commit()
 
+    def cancel(self, batch_id: str) -> None:
+        """Discard a batch that was never approved. A 'sent' batch can't be canceled."""
+        status = self._status(batch_id)
+        if status == "sent":
+            raise ApprovalError(f"batch {batch_id} is already 'sent'; cannot cancel")
+        self._conn.execute(
+            "UPDATE batches SET status = 'canceled' WHERE batch_id = ?", (batch_id,)
+        )
+        self._conn.commit()
+
     # --- queries ----------------------------------------------------------
 
     def is_approved(self, batch_id: str) -> bool:

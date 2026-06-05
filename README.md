@@ -12,11 +12,14 @@ staffer who does it by hand.
 
 **It runs today with no credentials.** Point it at a CSV export of your open
 invoices (or the built-in mock fixtures) and it shows exactly what it *would* send
-— nothing leaves without explicit human approval. Real billing-system adapters
-(QuickBooks Online / Desktop) are built and ready to switch on once the data source
-is confirmed. The deterministic pieces are kept isolated and portable, and an
-importable **n8n workflow** runs the whole loop on a schedule with human approval
-(see ["How this maps to n8n"](#how-this-maps-to-n8n)).
+— nothing leaves without explicit human approval. The **recommended deployment is
+deliberately small**: run it on a schedule (cron / launchd / Task Scheduler) and
+approve sends from the CLI — one runtime, one SQLite file. The QuickBooks Online /
+Desktop adapters are **blueprinted and unit-tested but not verified against a live
+tenant** (and QuickBooks Desktop additionally needs a SOAP host that isn't in this
+repo) — build exactly one, for real, once you confirm where the data lives. An
+**optional** n8n workflow is included for shops that already run n8n
+(see ["Running on a schedule"](#running-on-a-schedule-cron-first-n8n-optional)).
 
 ---
 
@@ -120,8 +123,10 @@ sequenceDiagram
 **Source is pluggable; everything downstream is done.** The deterministic core is
 finished and tested against `MockInvoiceSource`. Three real sources are built:
 `CsvInvoiceSource` (runnable **today** against a Magazine Manager AR export — the
-no-credentials MVP) and both QuickBooks adapters (built and unit-tested, not yet
-verified against a live tenant). Going live is a one-line config change
+no-credentials MVP) and both QuickBooks adapters (built and unit-tested offline, **not
+yet verified against a live tenant** — and QuickBooks Desktop additionally needs a
+SOAP host that isn't in this repo, so build exactly one, for real, after the source
+is confirmed). Going live is a one-line config change
 (`source.kind`); the policy, templates, state store, approval flow, and notifiers
 do not change.
 
@@ -206,9 +211,19 @@ password**, not your login), set `REMINDERS_ALLOW_SEND=1`, then `run --send` and
 |---|---|---|
 | `list-due` | Lists invoices due for a reminder now, and at which stage. Read-only. | No |
 | `run --dry-run` *(default)* | Renders the real emails and prints them via `ConsoleNotifier`. Records nothing. | No |
-| `run --send` | Enqueues reminders into the `ApprovalQueue` as a pending batch; prints a summary + batch-id. Requires `REMINDERS_ALLOW_SEND=1`. | No |
+| `run --send` | Enqueues reminders into the `ApprovalQueue` as a pending batch; prints a summary + batch-id. Requires `REMINDERS_ALLOW_SEND=1`. Refuses a risky cold start (see below) unless capped or `--allow-cold-start`. | No |
 | `approve <batch-id>` | Releases an approved batch to the `SMTPNotifier`, then records each send to the state store. Requires `REMINDERS_ALLOW_SEND=1`. | **Yes** |
 | `history [--invoice ID]` | Dumps the audit trail (invoice, stage, sent-at, channel, recipient, batch, message hash). | No |
+| `batches [--cancel ID]` | Lists staged approval batches and their status; `--cancel` discards a pending batch (a canceled batch can never be sent). | No |
+
+> Add `--json` to any command (before or after the subcommand) for one
+> machine-readable JSON object on stdout — that's the surface the n8n workflow and
+> any script consume.
+>
+> **Cold-start safety.** The first `run --send` against a real source (csv /
+> quickbooks_\*) with an empty audit trail and no `first_contact_stage_cap` is
+> **refused** — otherwise a long-overdue backlog would open with FINAL notices. Set
+> the cap (recommended) or pass `--allow-cold-start` to acknowledge.
 
 ---
 
@@ -241,11 +256,14 @@ is held down to that stage; it escalates to its true age-bucket on later runs. T
 cap can only ever *lower* the first touch, never raise it. It ships **off** (so the
 mock demo still shows `friendly`/`firm`/`final`) — **turn it on for production.**
 
-**Idempotency** is enforced by a `UNIQUE(invoice_id, stage)` constraint in the
-state store: the same (invoice, stage) can never be recorded — or sent — twice,
-even if the job runs repeatedly or crashes mid-batch. The rendered body is
-SHA-256 hashed and stored, so a re-run can prove it already sent *this exact*
-message.
+**Idempotency.** A `UNIQUE(invoice_id, stage)` constraint makes the *audit record*
+exactly-once: the same (invoice, stage) can never be **recorded** twice, even if the
+job runs repeatedly or crashes. On the wire it is **at-least-once by deliberate
+choice** — `approve` sends, *then* records; a crash in the small window after SMTP
+accepts a message but before we record it would re-send that one reminder on the
+next run. For debt collection that's the safe direction (a rare duplicate nudge
+beats a silently-unsent chase). The rendered body is SHA-256 hashed and stored, so a
+re-run can prove it already sent *this exact* message.
 
 ---
 
@@ -308,14 +326,28 @@ one: where does the overdue list actually come from? Four paths, best to last re
 
 ---
 
-## How this maps to n8n
+## Running on a schedule (cron first, n8n optional)
 
-**There's a working, importable workflow** in
-[`integrations/n8n/`](integrations/n8n/) — import `invoice-reminders.workflow.json`
-and you get the scheduled dunning loop with human approval. n8n is the
-**orchestrator**; the tested Python core still makes every money-touching decision.
+**For one small publisher, plain scheduling is the simplest, most maintainable
+deployment — one runtime, nothing extra to host.** A daily preview, then a one-line
+approve when you're happy:
 
-The deliberate choice: **n8n does the glue, not the logic.**
+```bash
+# crontab: weekday mornings, email yourself the preview (sends nothing)
+0 8 * * 1-5  cd /opt/invoice-reminder && reminders run --dry-run | mail -s "Overdue invoices" you@pub.example
+# then, from a shell, when ready:
+REMINDERS_ALLOW_SEND=1 reminders run --send            # stage a batch -> prints a batch-id
+REMINDERS_ALLOW_SEND=1 reminders approve <batch-id>    # the only step that emails
+```
+
+The schedule is cron; the approval is you. Every money guarantee lives in the tested
+Python core — no second system owns any of it.
+
+### Optional: n8n (only if you already run it)
+
+If n8n is already your automation hub, an importable workflow is in
+[`integrations/n8n/`](integrations/n8n/). **n8n does the glue, not the logic** — it
+*invokes* the tested core, never re-implements it:
 
 | Concern | Who does it |
 |---|---|
@@ -332,7 +364,16 @@ hard idempotency guarantee (a DB constraint, not a hope), and the audit trail. S
 the workflow **invokes** the tested core through its `--json` CLI instead of
 re-implementing it. Both seatbelts survive the port: `REMINDERS_ALLOW_SEND=1` on the
 command nodes, and the Wait node as the human gate — **nothing sends without
-approval.** Details in [`integrations/n8n/README.md`](integrations/n8n/README.md).
+approval.**
+
+**Honest caveats for the n8n path:** it is **self-hosted only** — the Execute
+Command node is disabled on n8n Cloud — and the approval-notification node is a
+**stub you must wire** to your Slack/Email (out of the box the approve link only
+lands in the execution log). If you're *not* already running n8n, the cron + CLI
+above is strictly less to own for the same result. Either way, **never add a native
+Gmail/SMTP send node** — only `reminders approve` may send, or you bypass the
+`UNIQUE(invoice_id, stage)` idempotency constraint and the audit trail. Full setup
+in [`integrations/n8n/README.md`](integrations/n8n/README.md).
 
 ---
 

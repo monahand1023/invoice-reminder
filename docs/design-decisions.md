@@ -94,3 +94,42 @@ which orchestrator wraps it.
 README diagrams are **Mermaid** (a `flowchart` for architecture, a `sequenceDiagram`
 for the two-seatbelt approval flow). GitHub renders Mermaid inline; PlantUML needs a
 proxy/action, so Mermaid is the right choice for "renders cleanly on the repo page."
+
+## Decision 6 — architecture review: keep the core, simplify the edges
+
+An adversarial multi-lens review (simplicity prosecutor, architecture defender,
+n8n-native architect, operability realist → synthesis → red-team) reached a clear
+verdict: the **deterministic core is right-sized and must not change** — the stage
+policy, the `UNIQUE(invoice, stage)` idempotency, the audit trail, and the two
+seatbelts are exactly where money-correctness must live, and rebuilding them as
+untested low-code nodes would be the real over-engineering mistake. What was
+over-built is *breadth*, not the core: two mutually-exclusive QuickBooks adapters
+built before the source was confirmed, and n8n positioned as a co-equal layer.
+
+Resulting decisions:
+
+- **Recommended deployment is cron + the CLI, not n8n.** For one small publisher,
+  n8n is a second runtime that owns no correctness guarantee; "more n8n" is the
+  wrong direction. n8n stays in the repo as a clearly-labeled *optional* integration
+  for shops already running it (self-hosted only; approval-notification node is a
+  stub to wire). The Python core is unconditionally primary and self-sufficient.
+- **Cold-start safety is now enforced in code,** not a config footnote: the first
+  real `run --send` with an empty history and no `first_contact_stage_cap` is
+  refused (override with `--allow-cold-start`). This was the single highest
+  money-safety-per-line gap.
+- **Idempotency claim corrected to be honest:** exactly-once on the *audit record*
+  (the UNIQUE constraint); at-least-once on the *wire* by deliberate choice (a crash
+  after SMTP-accept but before record may re-send — the safe direction for debt
+  collection). The red-team's proposed "sent-intent row" fix was rejected because it
+  would invert this to at-most-once (a silently-unsent reminder), which is worse.
+- **The QuickBooks adapters are labeled as blueprints,** not "ready to switch on";
+  QuickBooks Desktop additionally needs a SOAP host that isn't in this repo. Build
+  exactly one, against a live tenant, after fact-finding.
+- **Batch visibility added** (`batches` / `batches --cancel`) so unapproved batches
+  don't accumulate silently.
+
+Still open (Dan's call): whether the day-to-day operator approves from the terminal
+or needs a clickable approval — and if the latter, it must be a two-step POST page
+with a single-use, expiring token, **never** a bare GET link (mail-scanner link
+prefetch would auto-fire it and release a send with no human intent). This is the
+real fork between cron+CLI and n8n for a non-technical operator.

@@ -6,6 +6,13 @@ core makes every money-touching decision.
 
 `invoice-reminders.workflow.json` — import via n8n → **Workflows → Import from File**.
 
+> **Before you reach for this:** for a single small publisher, plain `cron` + the
+> CLI (see the main README, "Running on a schedule") is simpler and has fewer moving
+> parts. Use this workflow only if you already run n8n. Two hard constraints:
+> it is **self-hosted only** (the Execute Command node is disabled on n8n Cloud), and
+> you **must wire the approval-notification node** (step 4 below) — out of the box
+> the approve link only appears in the execution log.
+
 ## What it does
 
 ```

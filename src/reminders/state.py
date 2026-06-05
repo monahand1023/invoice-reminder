@@ -84,6 +84,10 @@ class ReminderStateStore:
         ).fetchone()
         return row is not None
 
+    def has_any_sends(self) -> bool:
+        """True if anything has ever been sent. Used to detect a cold start."""
+        return self._conn.execute("SELECT 1 FROM sent_reminders LIMIT 1").fetchone() is not None
+
     # --- tone-rewrite cache (only used when the LLM seam is enabled) -------
 
     def get_cached_rewrite(self, invoice_id: str, stage: str, *, source_hash: str) -> str | None:

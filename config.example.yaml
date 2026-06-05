@@ -39,6 +39,8 @@ dunning:
   # overdue but have never been contacted. Without a cap, their FIRST email
   # would be a "FINAL NOTICE". Set this to a stage name to hold the first-ever
   # reminder for any invoice down to that stage; it escalates normally after.
+  # The CLI ENFORCES this: the first `run --send` against a real source with an
+  # empty history is refused unless this is set (or you pass --allow-cold-start).
   #   first_contact_stage_cap: "friendly"
   stages:
     - name: "friendly"
