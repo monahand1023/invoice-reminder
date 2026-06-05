@@ -433,6 +433,47 @@ Covered:
 - No web UI, queue broker, or container orchestration — just a CLI + SQLite.
 - No invented Magazine Manager endpoints.
 
+## FAQ
+
+**Why not just use n8n (or Zapier / Make) for this?**
+We evaluated it; it isn't the right fit here, for three reasons.
+1. **It doesn't solve the hard part.** The hard part is getting the overdue list
+   *out* of Magazine Manager, which has no public API. n8n has no Magazine Manager
+   node either — you'd still need the CSV export (or QuickBooks). The orchestrator
+   doesn't make that problem disappear.
+2. **It would own none of the safety.** The money-critical decisions — who's
+   overdue, which reminder, "never send the same notice twice," the audit trail —
+   would live in untested Function nodes. For invoices up to $100K we want those as
+   plain, unit-tested code with a database constraint enforcing idempotency, not a
+   visual node we *hope* behaves.
+3. **It's a second runtime** to install, secure, and back up. For one small
+   publisher chasing a few dozen invoices a month, plain cron + this CLI gives the
+   same schedule and the same approval gate with one moving part instead of three.
+If you *already* ran n8n for other things, using it purely as a scheduler in front
+of this tool would be fine — but the logic would still live here, not in n8n.
+
+**Is an AI deciding who gets billed, or how much?**
+No. Who's overdue, what they owe, and which reminder goes out are decided by plain,
+deterministic, **tested** code — no AI anywhere in that path. AI is confined to one
+optional, off-by-default job: softening the *wording* of an email. Even then it can
+never change the invoice number or amount — a guard falls back to the deterministic
+text if it tries.
+
+**Can it really run with no human?**
+Mostly — by design, not entirely. `cron-run` auto-sends the routine reminders
+(gentle/firm nudges, smaller balances, advertisers you've contacted before) with no
+human. But the irreversible cases — **final notices, large balances, and the
+first-ever email to a new advertiser** — are held for a ~30-second human review,
+enforced in code so no config change can switch it off. A flat-file export can be
+confidently wrong (a customer who paid last week may still show "unpaid"), and a
+human glance is the only thing that reliably catches that on the cases where a
+mistake is most costly.
+
+**Do we need QuickBooks?**
+No. It runs **today** off a CSV export of your overdue invoices — no API, no
+credentials. The QuickBooks adapters are built and ready *if* it turns out your
+billing syncs to QuickBooks, but the CSV path works either way.
+
 ## Repo layout
 
 ```
